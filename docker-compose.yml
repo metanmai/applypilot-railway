@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  applypilot:
+    build: .
+    container_name: applypilot
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount local ApplyPilot data directory directly
+      - ~/.applypilot:/data
+      # Resume and config for reference (read-only backup)
+      - ~/.applypilot:/etc/applypilot:ro
+    environment:
+      - APPLYPILOT_INTERVAL_HOURS=6
+      - APPLYPILOT_MIN_SCORE=7
+      - APPLYPILOT_DATA_DIR=/data
+      - PORT=8080
+      # LLM Configuration
+      - LLM_URL=${LLM_URL:-https://api.z.ai/api/coding/paas/v4}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_MODEL=${LLM_MODEL:-glm-4.5}
+      # Claude Configuration (for auto-apply)
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-https://api.z.ai/api/anthropic}
+      - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN}
+      - API_TIMEOUT_MS=${API_TIMEOUT_MS:-3000000}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

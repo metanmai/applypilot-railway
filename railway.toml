@@ -1,0 +1,26 @@
+[build]
+builder = "NIXPACKS"
+
+[deploy]
+# Health check path
+healthcheckPath = "/health"
+healthcheckTimeout = 300
+# Restart on crash
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+
+# PVC for persistent data
+[[services]]
+source = "."
+destination = "/data"
+type = "pvc"
+name = "applypilot-data"
+
+# Environment variables (set these in Railway dashboard)
+# APPLYPILOT_INTERVAL_HOURS = 6
+# APPLYPILOT_MIN_SCORE = 7
+# LLM_URL = your LLM endpoint
+# LLM_API_KEY = your API key
+# LLM_MODEL = glm-4.5
+# ANTHROPIC_BASE_URL = https://api.z.ai/api/anthropic
+# ANTHROPIC_AUTH_TOKEN = your Claude API key

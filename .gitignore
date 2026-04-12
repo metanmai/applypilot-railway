@@ -1,0 +1,26 @@
+# ApplyPilot Railway - Git Ignore
+
+# Environment variables (contains API keys)
+.env
+
+# Seed data (contains personal info and database)
+seed-data/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Docker
+.dockerignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git worktrees (isolated workspaces)
+.worktrees/
+worktrees/
