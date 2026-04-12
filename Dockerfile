@@ -39,7 +39,6 @@ WORKDIR /app
 
 # Copy application files
 COPY main.py workers.py .
-COPY templates/ templates/
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 

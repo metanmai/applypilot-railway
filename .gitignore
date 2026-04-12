@@ -25,3 +25,4 @@ __pycache__/
 .worktrees/
 worktrees/
 exclude ApplyPilot
+exclude ApplyPilot
