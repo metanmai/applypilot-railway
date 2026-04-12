@@ -24,3 +24,4 @@ __pycache__/
 # Git worktrees (isolated workspaces)
 .worktrees/
 worktrees/
+exclude ApplyPilot
