@@ -38,7 +38,7 @@ RUN pip install pydantic tls-client requests markdownify regex httpx
 WORKDIR /app
 
 # Copy application files
-COPY main.py workers.py .
+COPY main.py workers.py activity_log.py .
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
