@@ -43,7 +43,8 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 # Copy seed data (will be used to initialize PVC if empty)
-COPY seed-data/ /seed-data/
+# Note: seed-data is in .gitignore for security, so we create an empty directory
+RUN mkdir -p /seed-data
 
 # Create data directory for PVC
 RUN mkdir -p /data
