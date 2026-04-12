@@ -1,9 +1,0 @@
-[phases.build]
-cmd = "pip install -r requirements.txt"
-
-[phases.start]
-cmd = "python main.py"
-
-[static]
-# Include templates directory in the build
-dir = "templates"
