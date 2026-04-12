@@ -8,6 +8,7 @@ from pathlib import Path
 
 from applypilot.database import get_connection
 from applypilot.config import load_profile
+from activity_log import log_activity
 
 log = logging.getLogger(__name__)
 
@@ -175,6 +176,9 @@ class ScoreWorker(Worker):
         from applypilot.scoring.scorer import score_and_commit
         result = score_and_commit(job)
 
+        # Log activity
+        log_activity("info", "ScoreWorker", f"Scored {result['score']}/10", job.get('title'))
+
         # If score >= min_score, move to tailor stage
         if result['score'] >= self.min_score:
             self._save_result(job, 'pending_tailor')
@@ -227,6 +231,9 @@ class TailorWorker(Worker):
         # We'd need to adapt it or create a new single-job function
         log.info(f"Placeholder: generating tailored resume for {job.get('title', 'unknown')} -> {tailored_path}")
 
+        # Log activity
+        log_activity("info", "TailorWorker", "Generated tailored resume", job.get('title'))
+
         # Mark as tailored with the path and move to cover stage
         self._save_result(job, 'pending_cover', tailored_path=tailored_path)
 
@@ -273,6 +280,9 @@ class CoverWorker(Worker):
         # Placeholder: In production, this would generate an actual cover letter
         # using LLM or template-based approach
         log.info(f"Placeholder: generating cover letter for {job.get('title', 'unknown')} -> {cover_path}")
+
+        # Log activity
+        log_activity("info", "CoverWorker", "Generated cover letter", job.get('title'))
 
         # Mark as ready to apply with the cover letter path
         self._save_result(job, 'ready_to_apply', cover_path=cover_path)
@@ -326,10 +336,16 @@ class ApplyWorker(Worker):
             self._submit_application(job)
             self._save_result(job, 'applied', applied_at=datetime.now(timezone.utc).isoformat())
             log.info(f"Applied to: {job['title']} at {job['site']}")
+
+            # Log activity
+            log_activity("success", "ApplyWorker", f"Applied to {job['site']}", job.get('title'))
         except Exception as e:
             log.error(f"Failed to apply to {job['title']}: {e}")
             # Mark as applied anyway to avoid infinite retries
             self._save_result(job, 'applied')
+
+            # Log error activity
+            log_activity("error", "ApplyWorker", f"Failed: {str(e)[:50]}", job.get('title'))
 
     def _can_apply(self, job: dict) -> bool:
         """Check if job has all requirements for applying."""
@@ -405,7 +421,12 @@ class DiscoverWorker(Worker):
                 'defaults': {'results_per_site': self.jobs_per_query}
             }
         )
-        return stats.get('new', 0)
+
+        new_count = stats.get('new', 0)
+        if new_count > 0:
+            log_activity("info", "DiscoverWorker", f"Found {new_count} new jobs", query.get('query'))
+
+        return new_count
 
     def _process_job(self, job: dict) -> None:
         """DiscoverWorker doesn't process jobs from queue."""
@@ -434,6 +455,8 @@ class EnrichWorker(Worker):
             full_description = self._fetch_description(url)
             if full_description and len(full_description) > 100:
                 log.info(f"Fetched {len(full_description)} chars description for {job.get('title', 'unknown')}")
+                # Log activity
+                log_activity("info", "EnrichWorker", f"Fetched {len(full_description)} chars", job.get('title'))
                 # Update with full description and move to scoring
                 self._save_result(job, 'pending_score', full_description=full_description)
             else:
