@@ -16,6 +16,7 @@ import logging
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import unquote
 
 import yaml
 from flask import Flask, jsonify, request
@@ -582,8 +583,6 @@ def update_job_status(url):
 
     Returns: {"success": true}
     """
-    from urllib.parse import unquote
-
     conn = get_connection()
     data = request.get_json()
 
@@ -614,12 +613,16 @@ def update_job_status(url):
     update_sql = f"UPDATE jobs SET {', '.join(set_clauses)} WHERE url = ?"
 
     try:
-        conn.execute(update_sql, values)
+        cursor = conn.execute(update_sql, values)
+        if cursor.rowcount == 0:
+            conn.rollback()
+            return jsonify({"error": "Job URL not found"}), 404
         conn.commit()
         return jsonify({"success": True, "url": decoded_url, "status": status})
     except Exception as e:
         conn.rollback()
-        return jsonify({"error": str(e)}), 500
+        log.error(f"Error updating job status: {e}")
+        return jsonify({"error": "Internal server error"}), 500
 
 
 @app.route('/queue/status')
