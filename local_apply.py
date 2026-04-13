@@ -27,7 +27,7 @@ log = logging.getLogger(__name__)
 # Configuration
 RAILWAY_URL = os.environ.get('RAILWAY_URL', 'https://comfortable-flow-production.up.railway.app')
 STATE_FILE = Path.home() / '.applypilot' / 'local_apply_state.json'
-VALID_STATUSES = ['applied', 'captcha', 'expired', 'failed', 'login_required']
+VALID_STATUSES = ['actually_applied', 'captcha', 'expired', 'failed', 'login_required']
 
 
 class RailwayAPIClient:
@@ -80,7 +80,7 @@ class StateManager:
             'last_run': None,
             'total_attempted': 0,
             'stats': {
-                'applied': 0,
+                'actually_applied': 0,
                 'captcha': 0,
                 'expired': 0,
                 'failed': 0,
@@ -227,7 +227,7 @@ def main():
 
     # Show stats
     stats = state_mgr.state['stats']
-    log.info(f"Stats: applied={stats['applied']}, captcha={stats['captcha']}, "
+    log.info(f"Stats: actually_applied={stats['actually_applied']}, captcha={stats['captcha']}, "
              f"expired={stats['expired']}, failed={stats['failed']}")
 
     # TODO: Implement full flow
