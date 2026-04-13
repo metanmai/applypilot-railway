@@ -104,28 +104,37 @@ class StateManager:
         return encoded_url in self.state['jobs']
 
     def mark_attempted(self, url: str, status: str, title: str, duration_ms: int = 0):
-        """Mark job as attempted."""
-        from urllib.parse import quote
+        """Mark job as attempted, allowing status updates for retries."""
         encoded_url = quote(url, safe='')
 
-        # Skip if already attempted
-        if encoded_url in self.state['jobs']:
-            log.debug(f"Job already attempted: {url}")
-            return
+        # Check if already attempted
+        is_new = encoded_url not in self.state['jobs']
+        old_status = None
 
-        # Validate status
-        if status not in VALID_STATUSES:
-            log.warning(f"Invalid status '{status}', not recording statistics")
-            # Still record the job but don't increment stats
+        if not is_new:
+            old_status = self.state['jobs'][encoded_url].get('status')
+            if old_status == status:
+                log.debug(f"Job already attempted with same status: {url}")
+                return
+            log.info(f"Updating job status from {old_status} to {status}: {url}")
 
+        # Update or create job entry
         self.state['jobs'][encoded_url] = {
             'status': status,
             'timestamp': datetime.now(timezone.utc).isoformat(),
             'duration_ms': duration_ms,
             'title': title
         }
-        self.state['total_attempted'] += 1
 
+        # Update counters
+        if is_new:
+            self.state['total_attempted'] += 1
+        else:
+            # Decrement old status counter
+            if old_status in self.state['stats']:
+                self.state['stats'][old_status] -= 1
+
+        # Increment new status counter
         if status in self.state['stats']:
             self.state['stats'][status] += 1
 
@@ -289,6 +298,9 @@ def main():
         # Track results
         if status in results:
             results[status] += 1
+        elif status != 'dry_run':
+            log.warning(f"Unexpected status '{status}' - counting as failed")
+            results['failed'] += 1
 
         log.info("-" * 60)
 
