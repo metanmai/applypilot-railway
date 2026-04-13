@@ -27,6 +27,7 @@ log = logging.getLogger(__name__)
 # Configuration
 RAILWAY_URL = os.environ.get('RAILWAY_URL', 'https://comfortable-flow-production.up.railway.app')
 STATE_FILE = Path.home() / '.applypilot' / 'local_apply_state.json'
+VALID_STATUSES = ['applied', 'captcha', 'expired', 'failed', 'login_required']
 
 
 class RailwayAPIClient:
@@ -73,8 +74,8 @@ class StateManager:
             try:
                 with open(self.state_file, 'r') as f:
                     return json.load(f)
-            except (json.JSONDecodeError, IOError):
-                log.warning(f"Could not load state file, starting fresh")
+            except (json.JSONDecodeError, IOError) as e:
+                log.warning(f"Could not load state file: {e}, starting fresh")
         return {
             'last_run': None,
             'total_attempted': 0,
@@ -91,8 +92,11 @@ class StateManager:
     def save(self):
         """Save state to file."""
         self.state['last_run'] = datetime.now(timezone.utc).isoformat()
-        with open(self.state_file, 'w') as f:
-            json.dump(self.state, f, indent=2)
+        try:
+            with open(self.state_file, 'w') as f:
+                json.dump(self.state, f, indent=2)
+        except (IOError, OSError) as e:
+            log.error(f"Failed to save state file: {e}")
 
     def is_attempted(self, url: str) -> bool:
         """Check if job was already attempted."""
@@ -101,7 +105,18 @@ class StateManager:
 
     def mark_attempted(self, url: str, status: str, title: str, duration_ms: int = 0):
         """Mark job as attempted."""
+        from urllib.parse import quote
         encoded_url = quote(url, safe='')
+
+        # Skip if already attempted
+        if encoded_url in self.state['jobs']:
+            log.debug(f"Job already attempted: {url}")
+            return
+
+        # Validate status
+        if status not in VALID_STATUSES:
+            log.warning(f"Invalid status '{status}', not recording statistics")
+            # Still record the job but don't increment stats
 
         self.state['jobs'][encoded_url] = {
             'status': status,
