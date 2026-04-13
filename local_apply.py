@@ -59,6 +59,74 @@ class RailwayAPIClient:
         return response.json().get('success', False)
 
 
+class StateManager:
+    """Manage local state for progress tracking and resume capability."""
+
+    def __init__(self, state_file: Path):
+        self.state_file = state_file
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        self.state = self._load()
+
+    def _load(self) -> dict:
+        """Load state from file."""
+        if self.state_file.exists():
+            try:
+                with open(self.state_file, 'r') as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError):
+                log.warning(f"Could not load state file, starting fresh")
+        return {
+            'last_run': None,
+            'total_attempted': 0,
+            'stats': {
+                'applied': 0,
+                'captcha': 0,
+                'expired': 0,
+                'failed': 0,
+                'login_required': 0
+            },
+            'jobs': {}
+        }
+
+    def save(self):
+        """Save state to file."""
+        self.state['last_run'] = datetime.now(timezone.utc).isoformat()
+        with open(self.state_file, 'w') as f:
+            json.dump(self.state, f, indent=2)
+
+    def is_attempted(self, url: str) -> bool:
+        """Check if job was already attempted."""
+        encoded_url = quote(url, safe='')
+        return encoded_url in self.state['jobs']
+
+    def mark_attempted(self, url: str, status: str, title: str, duration_ms: int = 0):
+        """Mark job as attempted."""
+        encoded_url = quote(url, safe='')
+
+        self.state['jobs'][encoded_url] = {
+            'status': status,
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'duration_ms': duration_ms,
+            'title': title
+        }
+        self.state['total_attempted'] += 1
+
+        if status in self.state['stats']:
+            self.state['stats'][status] += 1
+
+        self.save()
+
+    def get_jobs_to_retry(self, status_filter: str = None) -> set:
+        """Get set of job URLs matching status filter."""
+        from urllib.parse import unquote
+        if status_filter:
+            return {
+                unquote(url) for url, data in self.state['jobs'].items()
+                if data.get('status') == status_filter
+            }
+        return set()
+
+
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -81,6 +149,16 @@ def main():
         logging.getLogger().setLevel(logging.DEBUG)
 
     log.info(f"Railway URL: {RAILWAY_URL}")
+
+    # Initialize state manager
+    state_mgr = StateManager(STATE_FILE)
+    log.info(f"State file: {STATE_FILE}")
+    log.info(f"Previously attempted: {state_mgr.state['total_attempted']} jobs")
+
+    # Show stats
+    stats = state_mgr.state['stats']
+    log.info(f"Stats: applied={stats['applied']}, captcha={stats['captcha']}, "
+             f"expired={stats['expired']}, failed={stats['failed']}")
 
     # TODO: Implement full flow
 
