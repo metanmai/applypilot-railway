@@ -142,6 +142,61 @@ class StateManager:
         return set()
 
 
+class JobProcessor:
+    """Process jobs using ApplyPilot's apply automation."""
+
+    def __init__(self):
+        self.base_cdp_port = 9222
+        self.worker_id = 0
+
+    def process_job(self, job: dict, dry_run: bool = False) -> tuple[str, int]:
+        """Process a single job application.
+
+        Returns:
+            Tuple of (status_string, duration_ms)
+            Status: 'actually_applied', 'captcha', 'expired', 'login_required', 'failed'
+        """
+        if dry_run:
+            log.info(f"[DRY RUN] Would apply to: {job.get('title')} at {job.get('site')}")
+            return ('dry_run', 0)
+
+        try:
+            # Import here to avoid issues if not available
+            from applypilot.apply.launcher import run_job
+
+            log.info(f"Applying to: {job.get('title')} at {job.get('site')} [{job.get('fit_score')}/10]")
+
+            # Run the apply automation
+            status, duration_ms = run_job(
+                job=job,
+                port=self.base_cdp_port,
+                worker_id=self.worker_id,
+                model='sonnet',
+                dry_run=dry_run
+            )
+
+            # Map ApplyPilot status to our status
+            status_map = {
+                'applied': 'actually_applied',
+                'captcha': 'captcha',
+                'expired': 'expired',
+                'login_issue': 'login_required',
+            }
+
+            mapped_status = status_map.get(status, status if ':' in status else 'failed')
+
+            log.info(f"Result: {mapped_status} ({duration_ms/1000:.1f}s)")
+            return (mapped_status, duration_ms)
+
+        except ImportError as e:
+            log.error(f"ApplyPilot apply module not available: {e}")
+            log.error("Make sure ApplyPilot is installed: pip install -e ApplyPilot")
+            return ('failed', 0)
+        except Exception as e:
+            log.error(f"Error processing job: {e}")
+            return ('failed', 0)
+
+
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
