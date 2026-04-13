@@ -219,29 +219,88 @@ def main():
         logging.getLogger().setLevel(logging.DEBUG)
 
     log.info(f"Railway URL: {RAILWAY_URL}")
+    log.info("=" * 60)
 
-    # Initialize state manager
+    # Initialize components
+    api = RailwayAPIClient(RAILWAY_URL)
     state_mgr = StateManager(STATE_FILE)
-    log.info(f"State file: {STATE_FILE}")
-    log.info(f"Previously attempted: {state_mgr.state['total_attempted']} jobs")
+    processor = JobProcessor()
 
-    # Show stats
-    stats = state_mgr.state['stats']
-    log.info(f"Stats: actually_applied={stats['actually_applied']}, captcha={stats['captcha']}, "
-             f"expired={stats['expired']}, failed={stats['failed']}")
+    # Get jobs to process
+    jobs = []
 
-    # TODO: Implement full flow
-
-    if args.dry_run:
-        log.info("DRY RUN MODE - No applications will be submitted")
-        # Fetch and display jobs
-        api = RailwayAPIClient(RAILWAY_URL)
-        jobs = api.fetch_jobs(min_score=7)
-        log.info(f"Found {len(jobs)} jobs")
-        for i, job in enumerate(jobs[:10], 1):
-            log.info(f"{i}. [{job.get('fit_score')}/10] {job.get('title')} at {job.get('site')}")
+    if args.single_job:
+        # Single job mode
+        jobs = [{'url': args.single_job, 'title': 'Single Job', 'site': 'Unknown', 'fit_score': 0}]
     else:
-        log.info("Full apply mode coming in next tasks...")
+        # Fetch from Railway
+        jobs = api.fetch_jobs(min_score=7, limit=args.limit or 1000)
+
+        # Filter by resume flag
+        if args.resume:
+            jobs = [j for j in jobs if not state_mgr.is_attempted(j['url'])]
+            log.info(f"Resume mode: {len(jobs)} unattempted jobs")
+
+        # Filter out captcha jobs unless ignoring
+        if not args.ignore_captcha:
+            captcha_jobs = state_mgr.get_jobs_to_retry('captcha')
+            if captcha_jobs:
+                jobs = [j for j in jobs if j['url'] not in captcha_jobs]
+                log.info(f"Skipping {len(captcha_jobs)} CAPTCHA jobs (use --ignore-captcha to retry)")
+
+        # Sort by score descending
+        jobs.sort(key=lambda j: j.get('fit_score', 0), reverse=True)
+
+    if not jobs:
+        log.info("No jobs to process")
+        return
+
+    if args.dry_run or args.single_job:
+        limit = args.limit if args.limit else len(jobs)
+    else:
+        limit = len(jobs)
+
+    log.info(f"Processing {limit} jobs...")
+    log.info("=" * 60)
+
+    # Process each job
+    results = {'actually_applied': 0, 'captcha': 0, 'expired': 0, 'failed': 0, 'login_required': 0}
+
+    for i, job in enumerate(jobs[:limit], 1):
+        log.info(f"[{i}/{limit}] {job.get('title')} at {job.get('site')} [{job.get('fit_score')}/10]")
+        log.info(f"URL: {job.get('url')}")
+
+        # Process the job
+        status, duration_ms = processor.process_job(job, dry_run=args.dry_run)
+
+        # Update Railway
+        if not args.dry_run and status != 'dry_run':
+            try:
+                applied_at = datetime.now(timezone.utc).isoformat() if status == 'actually_applied' else None
+                api.update_job_status(job['url'], status, applied_at)
+                log.info(f"Updated Railway: {status}")
+            except Exception as e:
+                log.error(f"Failed to update Railway: {e}")
+
+        # Update local state
+        if not args.dry_run:
+            state_mgr.mark_attempted(job['url'], status, job.get('title', ''), duration_ms)
+
+        # Track results
+        if status in results:
+            results[status] += 1
+
+        log.info("-" * 60)
+
+    # Summary
+    log.info("=" * 60)
+    log.info("SUMMARY:")
+    log.info(f"  Actually Applied: {results['actually_applied']}")
+    log.info(f"  CAPTCHA: {results['captcha']}")
+    log.info(f"  Expired: {results['expired']}")
+    log.info(f"  Login Required: {results['login_required']}")
+    log.info(f"  Failed: {results['failed']}")
+    log.info("=" * 60)
 
 
 if __name__ == '__main__':
