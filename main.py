@@ -545,7 +545,7 @@ def db_jobs():
     limit = request.args.get('limit', 20, type=int)
     site = request.args.get('site')
 
-    query = "SELECT title, site, location, fit_score, url FROM jobs WHERE 1=1"
+    query = "SELECT title, site, location, fit_score, url, tailored_path, cover_path FROM jobs WHERE 1=1"
     params = []
 
     if min_score is not None:
@@ -562,7 +562,7 @@ def db_jobs():
     rows = conn.execute(query, params).fetchall()
 
     # Convert to list of dicts
-    columns = ['title', 'site', 'location', 'fit_score', 'url']
+    columns = ['title', 'site', 'location', 'fit_score', 'url', 'tailored_path', 'cover_path']
     jobs = [dict(zip(columns, row)) for row in rows]
 
     return jsonify({
