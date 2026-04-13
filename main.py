@@ -14,7 +14,7 @@ Pipeline workers:
 import os
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -568,6 +568,58 @@ def db_jobs():
         "count": len(jobs),
         "jobs": jobs
     })
+
+
+@app.route('/db/jobs/<path:url>', methods=['PUT'])
+def update_job_status(url):
+    """Update job status after local apply.
+
+    Expects JSON body:
+    {
+        "status": "actually_applied" | "captcha" | "expired" | "login_required" | "failed",
+        "applied_at": "2026-04-13T10:30:00Z"  # optional, for actually_applied
+    }
+
+    Returns: {"success": true}
+    """
+    from urllib.parse import unquote
+
+    conn = get_connection()
+    data = request.get_json()
+
+    if not data:
+        return jsonify({"error": "Request body required"}), 400
+
+    status = data.get('status')
+    applied_at = data.get('applied_at')
+
+    # Validate status
+    valid_statuses = ['actually_applied', 'captcha', 'expired', 'login_required', 'failed']
+    if status not in valid_statuses:
+        return jsonify({"error": f"Invalid status. Must be one of: {valid_statuses}"}), 400
+
+    # URL decode the path parameter
+    decoded_url = unquote(url)
+
+    # Build update query
+    set_clauses = ["status = ?", "updated_at = ?"]
+    values = [status, datetime.now(timezone.utc).isoformat()]
+
+    if applied_at and status == 'actually_applied':
+        set_clauses.append("applied_at = ?")
+        values.append(applied_at)
+
+    values.append(decoded_url)
+
+    update_sql = f"UPDATE jobs SET {', '.join(set_clauses)} WHERE url = ?"
+
+    try:
+        conn.execute(update_sql, values)
+        conn.commit()
+        return jsonify({"success": True, "url": decoded_url, "status": status})
+    except Exception as e:
+        conn.rollback()
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/queue/status')
