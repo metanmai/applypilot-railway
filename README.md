@@ -50,6 +50,24 @@ curl -X POST http://localhost:8080/trigger
 | `/health` | GET | Health check for Railway |
 | `/trigger` | POST | Manually trigger pipeline run |
 
+## Local Apply
+
+To apply to jobs locally using your Chrome session:
+
+```bash
+# Dry run to see what would be applied
+python local_apply.py --dry-run
+
+# Apply to 5 jobs
+python local_apply.py --limit 5
+
+# Resume after interruption
+python local_apply.py --resume
+
+# Single job for testing
+python local_apply.py --single-job <url>
+```
+
 ## Notes
 
 - Resume and profile data should be in `~/.applypilot/` locally
