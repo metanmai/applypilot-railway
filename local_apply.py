@@ -27,6 +27,7 @@ log = logging.getLogger(__name__)
 # Configuration
 RAILWAY_URL = os.environ.get('RAILWAY_URL', 'https://comfortable-flow-production.up.railway.app')
 STATE_FILE = Path.home() / '.applypilot' / 'local_apply_state.json'
+CACHE_DIR = Path.home() / '.applypilot' / 'cache'
 VALID_STATUSES = ['actually_applied', 'captcha', 'expired', 'failed', 'login_required']
 
 
@@ -58,6 +59,25 @@ class RailwayAPIClient:
         )
         response.raise_for_status()
         return response.json().get('success', False)
+
+    def fetch_job_files(self, url: str) -> dict:
+        """Get file URLs for a job."""
+        encoded_url = quote(url, safe='')
+        response = requests.get(f"{self.base_url}/db/files/{encoded_url}", timeout=30)
+        response.raise_for_status()
+        return response.json()
+
+    def download_file(self, url: str, dest_path: Path) -> bool:
+        """Download a file from Railway to local cache."""
+        try:
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+            dest_path.write_bytes(response.content)
+            return True
+        except Exception as e:
+            log.warning(f"Failed to download {url}: {e}")
+            return False
 
 
 class StateManager:
@@ -154,9 +174,55 @@ class StateManager:
 class JobProcessor:
     """Process jobs using ApplyPilot's apply automation."""
 
-    def __init__(self):
+    def __init__(self, api_client):
         self.base_cdp_port = 9222
         self.worker_id = 0
+        self.api = api_client
+
+    def _prepare_job_files(self, job: dict) -> dict:
+        """Download tailored files and prepare job dict for run_job."""
+        job = job.copy()  # Don't modify original
+        url = job.get('url')
+
+        # Try to get file URLs from Railway
+        try:
+            files_info = self.api.fetch_job_files(url)
+
+            # Download tailored resume
+            tailored_url = files_info.get('tailored_url')
+            if tailored_url:
+                # Cache locally using a hash of the URL as filename
+                import hashlib
+                url_hash = hashlib.md5(url.encode()).hexdigest()
+                cached_resume = CACHE_DIR / 'tailored_resumes' / f'{url_hash}.txt'
+
+                if cached_resume.exists():
+                    log.debug(f"Using cached tailored resume: {cached_resume}")
+                else:
+                    log.info(f"Downloading tailored resume from Railway...")
+                    if self.api.download_file(tailored_url, cached_resume):
+                        job['tailored_resume_path'] = str(cached_resume)
+                    else:
+                        log.warning("Failed to download tailored resume, will use base resume")
+                if cached_resume.exists():
+                    job['tailored_resume_path'] = str(cached_resume)
+
+            # Download cover letter (optional)
+            cover_url = files_info.get('cover_url')
+            if cover_url:
+                import hashlib
+                url_hash = hashlib.md5(url.encode()).hexdigest()
+                cached_cover = CACHE_DIR / 'cover_letters' / f'{url_hash}.txt'
+
+                if cached_cover.exists():
+                    log.debug(f"Using cached cover letter: {cached_cover}")
+                elif self.api.download_file(cover_url, cached_cover):
+                    job['cover_letter_path'] = str(cached_cover)
+
+        except Exception as e:
+            log.warning(f"Could not fetch files from Railway: {e}")
+
+        return job
 
     def process_job(self, job: dict, dry_run: bool = False) -> tuple[str, int]:
         """Process a single job application.
@@ -175,9 +241,12 @@ class JobProcessor:
 
             log.info(f"Applying to: {job.get('title')} at {job.get('site')} [{job.get('fit_score')}/10]")
 
+            # Prepare job with downloaded files
+            prepared_job = self._prepare_job_files(job)
+
             # Run the apply automation
             status, duration_ms = run_job(
-                job=job,
+                job=prepared_job,
                 port=self.base_cdp_port,
                 worker_id=self.worker_id,
                 model='sonnet',
@@ -233,7 +302,7 @@ def main():
     # Initialize components
     api = RailwayAPIClient(RAILWAY_URL)
     state_mgr = StateManager(STATE_FILE)
-    processor = JobProcessor()
+    processor = JobProcessor(api)
 
     # Get jobs to process
     jobs = []

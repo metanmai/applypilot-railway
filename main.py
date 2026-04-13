@@ -625,6 +625,55 @@ def update_job_status(url):
         return jsonify({"error": "Internal server error"}), 500
 
 
+@app.route('/db/files/tailored/<path:filename>')
+def get_tailored_resume(filename):
+    """Download a tailored resume by filename."""
+    from flask import send_file
+    file_path = Path('/data') / 'tailored_resumes' / filename
+    if file_path.exists():
+        return send_file(file_path, as_attachment=True, download_name=filename)
+    return jsonify({"error": "File not found"}), 404
+
+
+@app.route('/db/files/cover/<path:filename>')
+def get_cover_letter(filename):
+    """Download a cover letter by filename."""
+    from flask import send_file
+    file_path = Path('/data') / 'cover_letters' / filename
+    if file_path.exists():
+        return send_file(file_path, as_attachment=True, download_name=filename)
+    return jsonify({"error": "File not found"}), 404
+
+
+@app.route('/db/files/<path:url>')
+def get_job_files(url):
+    """Get download URLs for all files associated with a job."""
+    from urllib.parse import unquote
+    conn = get_connection()
+    decoded_url = unquote(url)
+
+    row = conn.execute(
+        "SELECT tailored_path, cover_path FROM jobs WHERE url = ?",
+        (decoded_url,)
+    ).fetchone()
+
+    if not row:
+        return jsonify({"error": "Job not found"}), 404
+
+    tailored_path, cover_path = row
+    base_url = request.host_url.rstrip('/')
+
+    result = {"url": decoded_url}
+    if tailored_path:
+        filename = Path(tailored_path).name
+        result["tailored_url"] = f"{base_url}/db/files/tailored/{filename}"
+    if cover_path:
+        filename = Path(cover_path).name
+        result["cover_url"] = f"{base_url}/db/files/cover/{filename}"
+
+    return jsonify(result)
+
+
 @app.route('/queue/status')
 def queue_status():
     """Show current queue statistics."""
