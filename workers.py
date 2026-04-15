@@ -219,23 +219,62 @@ class TailorWorker(Worker):
 
     def _process_job(self, job: dict) -> None:
         """Generate and save tailored resume."""
-        import uuid
+        import re
+        from pathlib import Path
+        from applypilot.scoring.tailor import tailor_resume
+        from applypilot.config import load_profile, RESUME_PATH, TAILORED_DIR
 
-        # Generate a unique path for the tailored resume
-        # Use URL prefix and random suffix for uniqueness
-        safe_url_prefix = job['url'][:50].replace('/', '_').replace(':', '_')
-        tailored_path = f"data/tailored_resumes/{safe_url_prefix}_{uuid.uuid4().hex[:8]}.txt"
+        # Create tailored resumes directory
+        tailored_dir = Path(self.data_dir) / 'tailored_resumes'
+        tailored_dir.mkdir(parents=True, exist_ok=True)
 
-        # Placeholder: In production, this would call run_tailoring for this specific job
-        # Note: run_tailoring processes ALL jobs, not single jobs
-        # We'd need to adapt it or create a new single-job function
-        log.info(f"Placeholder: generating tailored resume for {job.get('title', 'unknown')} -> {tailored_path}")
+        # Generate safe filename
+        safe_title = re.sub(r"[^\w\s-]", "", job["title"])[:50].strip().replace(" ", "_")
+        safe_site = re.sub(r"[^\w\s-]", "", job["site"])[:20].strip().replace(" ", "_")
+        filename = f"{safe_site}_{safe_title}"
+        tailored_path = tailored_dir / f"{filename}.txt"
 
-        # Log activity
-        log_activity("info", "TailorWorker", "Generated tailored resume", job.get('title'))
+        # Check if file already exists
+        if tailored_path.exists():
+            db_path = f"data/tailored_resumes/{filename}.txt"
+            log.info(f"Tailored resume already exists for {job.get('title')}")
+            log_activity("info", "TailorWorker", "Using existing tailored resume", job.get('title'))
+            self._save_result(job, 'pending_cover', tailored_path=db_path)
+            return
 
-        # Mark as tailored with the path and move to cover stage
-        self._save_result(job, 'pending_cover', tailored_path=tailored_path)
+        # Load profile and base resume
+        profile = load_profile()
+        resume_text = RESUME_PATH.read_text(encoding="utf-8")
+
+        try:
+            # Generate tailored resume
+            tailored_text, report = tailor_resume(
+                resume_text=resume_text,
+                job=job,
+                profile=profile,
+                max_retries=3,
+                validation_mode="lenient"  # Use lenient to avoid too many failures
+            )
+
+            # Save tailored resume
+            tailored_path.write_text(tailored_text, encoding="utf-8")
+
+            # Build relative path for database (from /data perspective)
+            db_path = f"data/tailored_resumes/{filename}.txt"
+
+            # Log activity
+            log_activity("info", "TailorWorker",
+                         f"Generated tailored resume ({report.get('status', 'unknown')})",
+                         job.get('title'))
+
+            # Move to next stage
+            self._save_result(job, 'pending_cover', tailored_path=db_path)
+
+        except Exception as e:
+            log.error(f"Failed to tailor resume for {job.get('title')}: {e}")
+            # Still mark as ready_to_apply so it doesn't block - will use base resume
+            self._save_result(job, 'ready_to_apply')
+            log_activity("error", "TailorWorker", f"Failed: {str(e)[:50]}", job.get('title'))
 
 
 class CoverWorker(Worker):
@@ -270,30 +309,103 @@ class CoverWorker(Worker):
 
     def _process_job(self, job: dict) -> None:
         """Generate and save cover letter."""
-        import uuid
+        import re
+        from pathlib import Path
+        from applypilot.llm import get_client
+        from applypilot.config import load_profile
 
-        # Generate a unique path for the cover letter
-        # Use URL prefix and random suffix for uniqueness
-        safe_url_prefix = job['url'][:50].replace('/', '_').replace(':', '_')
-        cover_path = f"data/cover_letters/{safe_url_prefix}_{uuid.uuid4().hex[:8]}.txt"
+        # Create cover letters directory
+        cover_dir = Path(self.data_dir) / 'cover_letters'
+        cover_dir.mkdir(parents=True, exist_ok=True)
 
-        # Placeholder: In production, this would generate an actual cover letter
-        # using LLM or template-based approach
-        log.info(f"Placeholder: generating cover letter for {job.get('title', 'unknown')} -> {cover_path}")
+        # Generate safe filename
+        safe_title = re.sub(r"[^\w\s-]", "", job["title"])[:50].strip().replace(" ", "_")
+        safe_site = re.sub(r"[^\w\s-]", "", job["site"])[:20].strip().replace(" ", "_")
+        filename = f"{safe_site}_{safe_title}"
+        cover_path = cover_dir / f"{filename}.txt"
 
-        # Log activity
-        log_activity("info", "CoverWorker", "Generated cover letter", job.get('title'))
+        # Check if file already exists
+        if cover_path.exists():
+            db_path = f"data/cover_letters/{filename}.txt"
+            log.info(f"Cover letter already exists for {job.get('title')}")
+            log_activity("info", "CoverWorker", "Using existing cover letter", job.get('title'))
+            self._save_result(job, 'ready_to_apply', cover_path=db_path)
+            return
 
-        # Mark as ready to apply with the cover letter path
-        self._save_result(job, 'ready_to_apply', cover_path=cover_path)
+        try:
+            # Generate cover letter using LLM
+            profile = load_profile()
+            personal = profile.get('personal', {})
+            resume_facts = profile.get('resume_facts', {})
+
+            # Build cover letter prompt
+            prompt = f"""Write a concise, professional cover letter for this job application.
+
+JOB TITLE: {job['title']}
+COMPANY: {job['site']}
+LOCATION: {job.get('location', 'Remote')}
+
+JOB DESCRIPTION:
+{(job.get('full_description') or '')[:3000]}
+
+CANDIDATE INFO:
+- Name: {personal.get('full_name', 'Candidate')}
+- Email: {personal.get('email', '')}
+- Current Role: {resume_facts.get('preserved_companies', ['N/A'])[0] if resume_facts.get('preserved_companies') else 'Software Engineer'}
+
+Requirements:
+- Keep it under 200 words
+- Focus on relevant skills and experience
+- Be specific to this role
+- Professional but conversational tone
+- No fluff or generic phrases
+
+Return ONLY the cover letter text, no preamble."""
+
+            client = get_client()
+            cover_letter = client.chat(
+                [{"role": "user", "content": prompt}],
+                max_tokens=500,
+                temperature=0.7
+            )
+
+            # Clean up the response
+            cover_letter = cover_letter.strip()
+            if cover_letter.startswith('"') and cover_letter.endswith('"'):
+                cover_letter = cover_letter[1:-1]
+            if cover_letter.startswith('```') and cover_letter.endswith('```'):
+                cover_letter = cover_letter[3:-3].strip()
+            if cover_letter.lower().startswith('here is'):
+                lines = cover_letter.split('\n')
+                cover_letter = '\n'.join(lines[1:]).strip()
+
+            # Save cover letter
+            cover_path.write_text(cover_letter, encoding="utf-8")
+
+            # Build relative path for database
+            db_path = f"data/cover_letters/{filename}.txt"
+
+            # Log activity
+            log_activity("info", "CoverWorker", "Generated cover letter", job.get('title'))
+
+            # Mark as ready to apply
+            self._save_result(job, 'ready_to_apply', cover_path=db_path)
+
+        except Exception as e:
+            log.error(f"Failed to generate cover letter for {job.get('title')}: {e}")
+            # Still mark as ready_to_apply - cover letter is optional
+            self._save_result(job, 'ready_to_apply')
+            log_activity("error", "CoverWorker", f"Failed: {str(e)[:50]}", job.get('title'))
 
 
 class ApplyWorker(Worker):
-    """Worker that auto-submits job applications."""
+    """Worker that auto-submits job applications using Chrome automation."""
 
     def __init__(self, data_dir: Path, min_score: int = 7, sleep_interval: int = 5, auto_apply: bool = False):
         super().__init__(data_dir, min_score, sleep_interval)
         self.auto_apply = auto_apply
+        self.chrome_port = 9222
+        self.worker_id = 0
 
     def _get_next_job_status(self) -> str:
         return 'ready_to_apply'
@@ -324,50 +436,110 @@ class ApplyWorker(Worker):
 
     def _process_job(self, job: dict) -> None:
         """Process job application."""
-        # Check if we can apply (has all requirements)
-        if not self._can_apply(job):
-            log.info(f"Cannot apply to {job['title']}: missing requirements")
-            # Mark as applied even if not actually applied (keeps pipeline moving)
+        if not self.auto_apply:
+            log.info(f"Auto-apply disabled, skipping: {job['title']}")
             self._save_result(job, 'applied')
             return
+
+        # Check if Chrome is available
+        if not self._chrome_available():
+            log.warning("Chrome not available, skipping application")
+            # Move to failed status so it can be retried later
+            self._save_result(job, 'ready_to_apply')
+            time.sleep(30)  # Wait longer before retry
+            return
+
+        # Prepare job with file paths
+        prepared_job = self._prepare_job(job)
 
         # Submit application
         try:
-            self._submit_application(job)
-            self._save_result(job, 'applied', applied_at=datetime.now(timezone.utc).isoformat())
-            log.info(f"Applied to: {job['title']} at {job['site']}")
+            status, duration_ms = self._submit_application(prepared_job)
 
-            # Log activity
-            log_activity("success", "ApplyWorker", f"Applied to {job['site']}", job.get('title'))
+            # Map status to database values
+            status_map = {
+                'applied': 'actually_applied',
+                'captcha': 'captcha',
+                'expired': 'expired',
+                'login_issue': 'login_required',
+            }
+
+            mapped_status = status_map.get(status, status if ':' in status else 'failed')
+
+            if mapped_status == 'actually_applied':
+                self._save_result(job, 'applied', applied_at=datetime.now(timezone.utc).isoformat())
+                log.info(f"Applied to: {job['title']} at {job['site']}")
+                log_activity("success", "ApplyWorker", f"Applied to {job['site']}", job.get('title'))
+            else:
+                # For failures, mark as applied anyway to avoid infinite retries
+                # but keep track of the reason
+                self._save_result(job, 'applied')
+                log.info(f"Application {mapped_status}: {job['title']} at {job['site']}")
+                log_activity("info", "ApplyWorker", f"{mapped_status}", job.get('title'))
+
         except Exception as e:
             log.error(f"Failed to apply to {job['title']}: {e}")
-            # Mark as applied anyway to avoid infinite retries
             self._save_result(job, 'applied')
-
-            # Log error activity
             log_activity("error", "ApplyWorker", f"Failed: {str(e)[:50]}", job.get('title'))
 
-    def _can_apply(self, job: dict) -> bool:
-        """Check if job has all requirements for applying."""
-        return (
-            job.get('tailored_path') is not None and
-            job.get('cover_path') is not None and
-            job.get('fit_score', 0) >= self.min_score
-        )
+    def _chrome_available(self) -> bool:
+        """Check if Chrome with remote debugging is available."""
+        import socket
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2)
+            result = sock.connect_ex(('localhost', self.chrome_port))
+            sock.close()
+            return result == 0
+        except:
+            return False
 
-    def _submit_application(self, job: dict):
+    def _prepare_job(self, job: dict) -> dict:
+        """Prepare job with file paths for apply automation."""
+        from pathlib import Path
+
+        job = job.copy()
+        data_path = Path(self.data_dir)
+
+        # Add tailored resume path if exists
+        if job.get('tailored_path'):
+            tailored_path = data_path / job['tailored_path'].replace('data/', '')
+            if tailored_path.exists():
+                job['tailored_resume_path'] = str(tailored_path)
+
+        # Add cover letter path if exists
+        if job.get('cover_path'):
+            cover_path = data_path / job['cover_path'].replace('data/', '')
+            if cover_path.exists():
+                job['cover_letter_path'] = str(cover_path)
+
+        # Add base resume path as fallback
+        from applypilot.config import RESUME_PATH
+        if 'tailored_resume_path' not in job:
+            job['tailored_resume_path'] = str(RESUME_PATH)
+
+        return job
+
+    def _submit_application(self, job: dict) -> tuple[str, int]:
         """Submit job application via Chrome automation.
 
-        For now, placeholder that just marks as applied.
-        In production, this would integrate with applypilot apply module.
+        Returns:
+            Tuple of (status_string, duration_ms)
         """
-        if not self.auto_apply:
-            log.info(f"Auto-apply disabled, would apply to: {job['title']}")
-            return
+        from applypilot.apply.launcher import run_job
 
-        # Placeholder: Chrome automation integration
-        # This would use the applypilot apply module when available
-        log.info(f"Placeholder: submitting application for {job['title']}")
+        log.info(f"Applying to: {job.get('title')} at {job.get('site')} [{job.get('fit_score')}/10]")
+
+        status, duration_ms = run_job(
+            job=job,
+            port=self.chrome_port,
+            worker_id=self.worker_id,
+            model='sonnet',
+            dry_run=False
+        )
+
+        log.info(f"Result: {status} ({duration_ms/1000:.1f}s)")
+        return status, duration_ms
 
 
 class DiscoverWorker(Worker):

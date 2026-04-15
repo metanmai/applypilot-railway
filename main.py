@@ -593,7 +593,7 @@ def update_job_status(url):
     applied_at = data.get('applied_at')
 
     # Validate status
-    valid_statuses = ['actually_applied', 'captcha', 'expired', 'login_required', 'failed']
+    valid_statuses = ['actually_applied', 'captcha', 'expired', 'login_required', 'failed', 'sso_required']
     if status not in valid_statuses:
         return jsonify({"error": f"Invalid status. Must be one of: {valid_statuses}"}), 400
 
@@ -798,6 +798,164 @@ def repair_job_statuses():
             "status": "error",
             "error": str(e)
         }), 500
+
+
+# ---------------------------------------------------------------------------
+# Chrome/Login Management Endpoints
+# ---------------------------------------------------------------------------
+
+chrome_process = None
+CHROME_PORT = 9222
+CHROME_PROFILE = DATA_DIR / 'chrome-profile'
+
+
+@app.route('/chrome/start', methods=['POST'])
+def start_chrome():
+    """Start Chrome with remote debugging for login session."""
+    global chrome_process
+
+    if chrome_process and chrome_process.poll() is None:
+        return jsonify({
+            "status": "already_running",
+            "port": CHROME_PORT,
+            "message": "Chrome is already running"
+        })
+
+    try:
+        import subprocess
+
+        # Create chrome profile directory
+        CHROME_PROFILE.mkdir(parents=True, exist_ok=True)
+
+        # Chrome args for remote debugging
+        chrome_args = [
+            'google-chrome',
+            f'--remote-debugging-port={CHROME_PORT}',
+            f'--user-data-dir={CHROME_PROFILE}',
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-background-networking',
+            '--disable-background-timer-throttling',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-breakpad',
+            '--disable-client-side-phishing-detection',
+            '--disable-component-extensions-with-background-pages',
+            '--disable-default-apps',
+            '--disable-extensions',
+            '--disable-features=Translate,BlinkGenPropertyTrees',
+            '--disable-hang-monitor',
+            '--disable-ipc-flooding-protection',
+            '--disable-popup-blocking',
+            '--disable-prompt-on-repost',
+            '--disable-renderer-backgrounding',
+            '--disable-sync',
+            '--force-color-profile=srgb',
+            '--metrics-recording-only',
+            '--no-first-run',
+            '--enable-features=NetworkService,NetworkServiceInProcess',
+            '--mute-audio',
+            '--headless=new',  # Run in headless mode
+            'about:blank'
+        ]
+
+        chrome_process = subprocess.Popen(chrome_args)
+
+        log.info(f"Started Chrome with remote debugging on port {CHROME_PORT}")
+        log_activity("info", "Chrome", "Started with remote debugging", None)
+
+        return jsonify({
+            "status": "started",
+            "port": CHROME_PORT,
+            "message": f"Chrome started on port {CHROME_PORT}",
+            "instructions": {
+                "step1": f"SSH tunnel: ssh -L {CHROME_PORT}:localhost:{CHROME_PORT} <your-railway-service>",
+                "step2": "Open chrome://inspect on your local machine",
+                "step3": "Click 'inspect' on the remote target",
+                "step4": "Navigate to LinkedIn/Indeed and log in",
+                "step5": "Close the inspector - login session is saved"
+            }
+        })
+    except Exception as e:
+        log.error(f"Failed to start Chrome: {e}")
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
+
+
+@app.route('/chrome/stop', methods=['POST'])
+def stop_chrome():
+    """Stop Chrome process."""
+    global chrome_process
+
+    if not chrome_process:
+        return jsonify({
+            "status": "not_running",
+            "message": "Chrome is not running"
+        })
+
+    try:
+        chrome_process.terminate()
+        chrome_process.wait(timeout=10)
+        chrome_process = None
+        log_activity("info", "Chrome", "Stopped", None)
+        return jsonify({"status": "stopped"})
+    except Exception as e:
+        chrome_process.kill()
+        chrome_process = None
+        return jsonify({
+            "status": "killed",
+            "message": f"Chrome was killed: {e}"
+        })
+
+
+@app.route('/chrome/status')
+def chrome_status():
+    """Check if Chrome is running."""
+    global chrome_process
+    import socket
+
+    is_running = chrome_process is not None and chrome_process.poll() is None
+
+    # Also check if port is actually listening
+    port_open = False
+    if is_running:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(1)
+            port_open = sock.connect_ex(('localhost', CHROME_PORT)) == 0
+            sock.close()
+        except:
+            port_open = False
+
+    return jsonify({
+        "running": is_running,
+        "port_open": port_open,
+        "port": CHROME_PORT,
+        "profile": str(CHROME_PROFILE)
+    })
+
+
+@app.route('/login')
+def login_instructions():
+    """Get login instructions for LinkedIn and Indeed."""
+    return jsonify({
+        "title": "ApplyPilot - Browser Login Setup",
+        "instructions": [
+            "1. Start Chrome: POST /chrome/start",
+            "2. Create SSH tunnel: ssh -L 9222:localhost:9222 railway@<your-service>",
+            "3. Open chrome://inspect on your local machine",
+            "4. Click 'inspect' on the remote target (localhost:9222)",
+            "5. In the DevTools window, navigate to:",
+            "   - https://www.linkedin.com/login",
+            "   - https://secure.indeed.com/account/login",
+            "6. Log in to both sites",
+            "7. Close the DevTools window - your session is saved!",
+            "8. Check status: GET /chrome/status"
+        ],
+        "sites": ["LinkedIn", "Indeed"],
+        "note": "You only need to log in once. The session persists in Railway's /data storage."
+    })
 
 
 if __name__ == '__main__':

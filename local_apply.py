@@ -28,7 +28,9 @@ log = logging.getLogger(__name__)
 RAILWAY_URL = os.environ.get('RAILWAY_URL', 'https://comfortable-flow-production.up.railway.app')
 STATE_FILE = Path.home() / '.applypilot' / 'local_apply_state.json'
 CACHE_DIR = Path.home() / '.applypilot' / 'cache'
-VALID_STATUSES = ['actually_applied', 'captcha', 'expired', 'failed', 'login_required']
+BASE_RESUME = Path.home() / '.applypilot' / 'resume.txt'
+CHROME_USER_DATA = Path.home() / '.applypilot' / 'chrome-profile'
+VALID_STATUSES = ['actually_applied', 'captcha', 'expired', 'failed', 'login_required', 'sso_required']
 
 
 class RailwayAPIClient:
@@ -184,7 +186,13 @@ class JobProcessor:
         job = job.copy()  # Don't modify original
         url = job.get('url')
 
+        # Check if base resume exists
+        if not BASE_RESUME.exists():
+            log.warning(f"Base resume not found at {BASE_RESUME}")
+            return job
+
         # Try to get file URLs from Railway
+        tailored_downloaded = False
         try:
             files_info = self.api.fetch_job_files(url)
 
@@ -198,14 +206,15 @@ class JobProcessor:
 
                 if cached_resume.exists():
                     log.debug(f"Using cached tailored resume: {cached_resume}")
+                    job['tailored_resume_path'] = str(cached_resume)
+                    tailored_downloaded = True
                 else:
                     log.info(f"Downloading tailored resume from Railway...")
                     if self.api.download_file(tailored_url, cached_resume):
                         job['tailored_resume_path'] = str(cached_resume)
+                        tailored_downloaded = True
                     else:
                         log.warning("Failed to download tailored resume, will use base resume")
-                if cached_resume.exists():
-                    job['tailored_resume_path'] = str(cached_resume)
 
             # Download cover letter (optional)
             cover_url = files_info.get('cover_url')
@@ -221,6 +230,11 @@ class JobProcessor:
 
         except Exception as e:
             log.warning(f"Could not fetch files from Railway: {e}")
+
+        # Fallback to base resume if tailored not available
+        if not tailored_downloaded and 'tailored_resume_path' not in job:
+            log.info(f"Using base resume: {BASE_RESUME}")
+            job['tailored_resume_path'] = str(BASE_RESUME)
 
         return job
 
