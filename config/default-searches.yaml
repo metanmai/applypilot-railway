@@ -1,0 +1,102 @@
+# ApplyPilot search configuration
+# Edit this file to refine your job search queries.
+
+defaults:
+  location: "Remote"
+  distance: 0
+  hours_old: 168
+  results_per_site: 50
+
+locations:
+  # Remote - Worldwide
+  - location: "Remote"
+    remote: true
+  # United States
+  - location: "United States"
+    remote: true
+  - location: "USA"
+    remote: true
+  # Canada
+  - location: "Canada"
+    remote: true
+  # United Kingdom
+  - location: "United Kingdom"
+    remote: true
+  # Germany
+  - location: "Germany"
+    remote: true
+  # Netherlands
+  - location: "Netherlands"
+    remote: true
+  # Switzerland
+  - location: "Switzerland"
+    remote: true
+  # France
+  - location: "France"
+    remote: true
+  # Spain
+  - location: "Spain"
+    remote: true
+  # Italy
+  - location: "Italy"
+    remote: true
+  # Sweden
+  - location: "Sweden"
+    remote: true
+  # Norway
+  - location: "Norway"
+    remote: true
+  # Denmark
+  - location: "Denmark"
+    remote: true
+  # Finland
+  - location: "Finland"
+    remote: true
+  # Ireland
+  - location: "Ireland"
+    remote: true
+  # Belgium
+  - location: "Belgium"
+    remote: true
+  # Austria
+  - location: "Austria"
+    remote: true
+  # Australia
+  - location: "Australia"
+    remote: true
+
+queries:
+  - query: "Software Development Engineer II"
+    tier: 1
+  - query: "Software Engineer II"
+    tier: 2
+  - query: "SDE II"
+    tier: 3
+  - query: "Senior Software Engineer"
+    tier: 3
+  - query: "Software Engineer"
+    tier: 3
+  - query: "Full Stack Engineer"
+    tier: 3
+  - query: "Full Stack Developer"
+    tier: 3
+  - query: "Backend Engineer"
+    tier: 3
+  - query: "Backend Developer"
+    tier: 3
+  - query: "Software Developer II"
+    tier: 3
+  - query: "Member of Technical Staff"
+    tier: 3
+  - query: "Engineer II"
+    tier: 3
+  - query: "Software Engineer 2"
+    tier: 3
+  - query: "SWE II"
+    tier: 3
+  - query: "Application Engineer"
+    tier: 3
+  - query: "Platform Engineer"
+    tier: 3
+  - query: "Systems Engineer"
+    tier: 3

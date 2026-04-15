@@ -42,9 +42,8 @@ COPY main.py workers.py activity_log.py .
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-# Copy seed data (will be used to initialize PVC if empty)
-# Note: seed-data is in .gitignore for security, so we create an empty directory
-RUN mkdir -p /seed-data
+# Copy default configuration (searches.yaml for job discovery)
+COPY config/ /seed-config/
 
 # Create data directory for PVC
 RUN mkdir -p /data
