@@ -545,9 +545,12 @@ class ApplyWorker(Worker):
 class DiscoverWorker(Worker):
     """Worker that continuously discovers jobs from job boards."""
 
-    def __init__(self, data_dir: Path, queries: list[dict], jobs_per_query: int = 10):
+    def __init__(self, data_dir: Path, queries: list[dict], locations: list[dict] | None = None,
+                 search_defaults: dict | None = None, jobs_per_query: int = 10):
         super().__init__(data_dir)
         self.queries = queries
+        self.locations = locations or []
+        self.search_defaults = search_defaults or {}
         self.jobs_per_query = jobs_per_query
         self.current_query_index = 0
 
@@ -585,14 +588,20 @@ class DiscoverWorker(Worker):
         """
         from applypilot.discovery.jobspy import run_discovery
 
-        # Run discovery with proper limit via config dict
-        # run_discovery reads 'results_per_site' from cfg['defaults']
-        stats = run_discovery(
-            cfg={
-                'queries': [query],
-                'defaults': {'results_per_site': self.jobs_per_query}
-            }
-        )
+        # Build discovery config with queries, locations, and defaults
+        cfg = {
+            'queries': [query],
+            'locations': self.locations,
+        }
+
+        # Merge defaults - jobs_per_query from constructor takes precedence
+        cfg['defaults'] = {
+            'results_per_site': self.jobs_per_query,
+            **self.search_defaults,  # Override with yaml defaults (hours_old, etc)
+        }
+
+        # Run discovery
+        stats = run_discovery(cfg=cfg)
 
         new_count = stats.get('new', 0)
         if new_count > 0:

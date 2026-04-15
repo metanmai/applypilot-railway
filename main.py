@@ -73,20 +73,28 @@ def start_workers():
     searches_path = DATA_DIR / "searches.yaml"
     if searches_path.exists():
         with open(searches_path) as f:
-            queries = yaml.safe_load(f).get('queries', [])
+            search_config = yaml.safe_load(f)
+            queries = search_config.get('queries', [])
+            locations = search_config.get('locations', [])
+            search_defaults = search_config.get('defaults', {})
     else:
-        # Fallback to default queries
+        # Fallback to default queries with remote locations
         queries = [
             {"query": "Software Engineer II", "tier": 1},
             {"query": "SDE II", "tier": 2},
         ]
-        log.info(f"Using default queries (no searches.yaml found at {searches_path})")
+        locations = [
+            {"location": "Remote", "remote": True},
+            {"location": "United States", "remote": True},
+        ]
+        search_defaults = {"hours_old": 168, "results_per_site": 50}
+        log.info(f"Using default queries and locations (no searches.yaml found at {searches_path})")
 
     # Create workers
     batch_size = int(os.environ.get("BATCH_SIZE", "10"))
 
     workers = [
-        DiscoverWorker(DATA_DIR, queries, jobs_per_query=batch_size),
+        DiscoverWorker(DATA_DIR, queries, locations=locations, search_defaults=search_defaults, jobs_per_query=batch_size),
         EnrichWorker(DATA_DIR),
         ScoreWorker(DATA_DIR, min_score=MIN_SCORE),
         TailorWorker(DATA_DIR, min_score=MIN_SCORE),
