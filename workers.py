@@ -621,8 +621,8 @@ class EnrichWorker(Worker):
         return 'pending_discover'
 
     def _is_already_processed(self, job: dict) -> bool:
-        """Skip jobs that already have a full description."""
-        return bool(job.get('full_description'))
+        """Process all jobs in pending_discover status to move them through pipeline."""
+        return False  # Always process to move jobs from pending_discover to pending_score
 
     def _process_job(self, job: dict) -> None:
         """Fetch full description for a job and move to scoring stage."""
