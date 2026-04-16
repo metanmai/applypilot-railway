@@ -813,9 +813,11 @@ def repair_job_statuses():
 # Chrome/Login Management Endpoints
 # ---------------------------------------------------------------------------
 
-chrome_process = None
-CHROME_PORT = 9222
-CHROME_PROFILE = DATA_DIR / 'chrome-profile'
+# Browser automation (Playwright-based - works on Railway without Chrome installation)
+playwright_context = None
+playwright_browser = None
+playwright = None
+CHROME_PROFILE = DATA_DIR / 'browser-profile'
 
 
 # HTTP proxy for Chrome DevTools Protocol (for login without SSH tunnel)
@@ -839,60 +841,34 @@ def _get_chrome_session() -> dict:
 
 @app.route('/chrome/navigate', methods=['POST'])
 def navigate_chrome():
-    """Navigate Chrome to a URL (returns page HTML)."""
+    """Navigate browser to a URL."""
+    global playwright_context
+
     data = request.get_json() or {}
     url = data.get('url')
 
     if not url:
         return jsonify({"error": "URL required"}), 400
 
+    if not playwright_context:
+        return jsonify({"error": "Browser not started. Call POST /chrome/start first"}), 503
+
     try:
-        # Get Chrome targets
-        response = requests.get("http://localhost:9222/json", timeout=5)
-        if response.status_code != 200:
-            return jsonify({"error": "Chrome not accessible"}), 503
-
-        targets = response.json()
-        page_target = None
-        for target in targets:
-            if target.get('type') == 'page':
-                page_target = target
-                break
-
-        if not page_target:
-            # Create new page
-            response = requests.post(f"http://localhost:9222/json/new?url={url}", timeout=5)
-            if response.status_code != 200:
-                return jsonify({"error": "Failed to create page"}), 500
-            page_target = response.json()
+        # Get or create a page
+        if playwright_context.pages:
+            page = playwright_context.pages[0]
+        else:
+            page = playwright_context.new_page()
 
         # Navigate to the URL
-        ws_url = page_target.get('webSocketDebuggerUrl')
-        if not ws_url:
-            return jsonify({"error": "No WebSocket URL"}), 500
+        page.goto(url, wait_until='networkidle', timeout=30000)
 
-        # Use simple HTTP-based navigation (via sendkeys to Chrome DevTools Protocol)
-        target_url = f"http://localhost:9222{page_target['id']}"
-        navigate_response = requests.put(
-            f"{target_url}/navigate",
-            json={"url": url},
-            timeout=10
-        )
-
-        if navigate_response.status_code == 200:
-            # Wait a bit for page to load
-            import time
-            time.sleep(3)
-
-            return jsonify({
-                "success": True,
-                "url": url,
-                "target_id": page_target['id'],
-                "message": "Navigated! Use /chrome/snapshot to see the page"
-            })
-
-        return jsonify({"error": "Navigation failed"}), 500
-
+        return jsonify({
+            "success": True,
+            "url": url,
+            "title": page.title(),
+            "message": "Navigated successfully"
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1118,73 +1094,65 @@ asyncio.run(tunnel())
 
 
 @app.route('/chrome/start', methods=['POST'])
-def start_chrome():
-    """Start Chrome with remote debugging for login session."""
-    global chrome_process
+def start_browser():
+    """Start Playwright browser for login session (works on Railway without Chrome)."""
+    global playwright, playwright_browser, playwright_context
 
-    if chrome_process and chrome_process.poll() is None:
+    if playwright_context:
         return jsonify({
             "status": "already_running",
-            "port": CHROME_PORT,
-            "message": "Chrome is already running"
+            "message": "Browser is already running"
         })
 
     try:
-        import subprocess
+        from playwright.sync_api import sync_playwright
 
-        # Create chrome profile directory
+        # Create browser profile directory
         CHROME_PROFILE.mkdir(parents=True, exist_ok=True)
 
-        # Chrome args for remote debugging
-        chrome_args = [
-            'google-chrome',
-            f'--remote-debugging-port={CHROME_PORT}',
-            f'--user-data-dir={CHROME_PROFILE}',
-            '--no-first-run',
-            '--no-default-browser-check',
-            '--disable-background-networking',
-            '--disable-background-timer-throttling',
-            '--disable-backgrounding-occluded-windows',
-            '--disable-breakpad',
-            '--disable-client-side-phishing-detection',
-            '--disable-component-extensions-with-background-pages',
-            '--disable-default-apps',
-            '--disable-extensions',
-            '--disable-features=Translate,BlinkGenPropertyTrees',
-            '--disable-hang-monitor',
-            '--disable-ipc-flooding-protection',
-            '--disable-popup-blocking',
-            '--disable-prompt-on-repost',
-            '--disable-renderer-backgrounding',
-            '--disable-sync',
-            '--force-color-profile=srgb',
-            '--metrics-recording-only',
-            '--no-first-run',
-            '--enable-features=NetworkService,NetworkServiceInProcess',
-            '--mute-audio',
-            '--headless=new',  # Run in headless mode
-            'about:blank'
-        ]
+        # Playwright context with persistent profile
+        playwright_instance = sync_playwright().start()
+        playwright_browser = playwright_instance.chromium.launch_persistent_context(
+            user_data_dir=str(CHROME_PROFILE),
+            headless=True,
+            args=[
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-background-networking',
+                '--disable-default-apps',
+                '--disable-extensions',
+                '--disable-gpu',
+                '--disable-sync',
+                '--mute-audio',
+                '--no-first-run',
+            ]
+        )
 
-        chrome_process = subprocess.Popen(chrome_args)
+        # Store for later use
+        playwright = playwright_instance
+        playwright_context = playwright_browser
 
-        log.info(f"Started Chrome with remote debugging on port {CHROME_PORT}")
-        log_activity("info", "Chrome", "Started with remote debugging", None)
+        log.info("Started Playwright browser with persistent profile")
+        log_activity("info", "Browser", "Started with Playwright (persistent profile)", None)
 
         return jsonify({
             "status": "started",
-            "port": CHROME_PORT,
-            "message": f"Chrome started on port {CHROME_PORT}",
-            "instructions": {
-                "step1": f"SSH tunnel: ssh -L {CHROME_PORT}:localhost:{CHROME_PORT} <your-railway-service>",
-                "step2": "Open chrome://inspect on your local machine",
-                "step3": "Click 'inspect' on the remote target",
-                "step4": "Navigate to LinkedIn/Indeed and log in",
-                "step5": "Close the inspector - login session is saved"
+            "message": "Browser started - ready for login",
+            "profile": str(CHROME_PROFILE),
+            "endpoints": {
+                "navigate": "POST /chrome/navigate?url=https://...",
+                "status": "GET /chrome/status",
+                "login_form": "GET /chrome/snapshot"
             }
         })
+    except ImportError:
+        return jsonify({
+            "status": "error",
+            "error": "Playwright not installed. Install with: pip install playwright && playwright install chromium"
+        }), 500
     except Exception as e:
-        log.error(f"Failed to start Chrome: {e}")
+        log.error(f"Failed to start browser: {e}")
         return jsonify({
             "status": "error",
             "error": str(e)
@@ -1192,113 +1160,141 @@ def start_chrome():
 
 
 @app.route('/chrome/stop', methods=['POST'])
-def stop_chrome():
-    """Stop Chrome process."""
-    global chrome_process
+def stop_browser():
+    """Stop Playwright browser."""
+    global playwright, playwright_browser, playwright_context
 
-    if not chrome_process:
+    if not playwright_context:
         return jsonify({
             "status": "not_running",
-            "message": "Chrome is not running"
+            "message": "Browser is not running"
         })
 
     try:
-        chrome_process.terminate()
-        chrome_process.wait(timeout=10)
-        chrome_process = None
-        log_activity("info", "Chrome", "Stopped", None)
+        if playwright_context:
+            playwright_context.close()
+            playwright_context = None
+        if playwright_browser:
+            playwright_browser = None
+        if playwright:
+            playwright.stop()
+            playwright = None
+
+        log_activity("info", "Browser", "Stopped", None)
         return jsonify({"status": "stopped"})
     except Exception as e:
-        chrome_process.kill()
-        chrome_process = None
+        # Reset state even if close fails
+        playwright_context = None
+        playwright_browser = None
+        playwright = None
         return jsonify({
-            "status": "killed",
-            "message": f"Chrome was killed: {e}"
+            "status": "stopped_with_error",
+            "message": f"Browser stopped with error: {e}"
         })
 
 
 @app.route('/chrome/status')
 def chrome_status():
-    """Check if Chrome is running."""
-    global chrome_process
-    import socket
+    """Check if browser is running."""
+    global playwright_context
 
-    is_running = chrome_process is not None and chrome_process.poll() is None
+    is_running = playwright_context is not None
 
-    # Also check if port is actually listening
-    port_open = False
+    # Check if we can actually use the context
+    pages = []
     if is_running:
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(1)
-            port_open = sock.connect_ex(('localhost', CHROME_PORT)) == 0
-            sock.close()
+            pages = playwright_context.pages
         except:
-            port_open = False
+            is_running = False
 
     return jsonify({
         "running": is_running,
-        "port_open": port_open,
-        "port": CHROME_PORT,
+        "browser_type": "playwright_chromium",
+        "pages_open": len(pages) if is_running else 0,
         "profile": str(CHROME_PROFILE)
     })
 
 
 @app.route('/chrome/json')
 def chrome_json():
-    """Proxy Chrome /json endpoint for DevTools discovery."""
+    """Return browser pages info (DevTools-style)."""
+    global playwright_context
     try:
-        response = requests.get(f"http://localhost:{CHROME_PORT}/json", timeout=5)
-        if response.status_code == 200:
-            # Rewrite WebSocket URLs for external access
-            targets = response.json()
-            public_host = request.host_url.rstrip('/')
-            for target in targets:
-                if 'webSocketDebuggerUrl' in target:
-                    # Replace localhost:9222 with our proxy endpoint
-                    ws_url = target['webSocketDebuggerUrl']
-                    target['webSocketDebuggerUrl'] = ws_url.replace(
-                        f'ws://localhost:{CHROME_PORT}',
-                        f'wss://{public_host}/chrome/ws'
-                    )
-            return jsonify(targets)
-        return jsonify({"error": "Chrome not responding"}), 503
+        if not playwright_context:
+            return jsonify({"error": "Browser not running"}), 503
+
+        pages_info = []
+        for i, page in enumerate(playwright_context.pages):
+            pages_info.append({
+                "id": str(i),
+                "type": "page",
+                "title": page.title(),
+                "url": page.url
+            })
+
+        return jsonify(pages_info)
     except Exception as e:
         return jsonify({"error": str(e)}), 503
 
 
 @app.route('/chrome/json/version')
 def chrome_version():
-    """Proxy Chrome /json/version endpoint."""
-    try:
-        response = requests.get(f"http://localhost:{CHROME_PORT}/json/version", timeout=5)
-        return response.json()
-    except:
-        return jsonify({"error": "Chrome not responding"}), 503
+    """Return browser version info."""
+    return jsonify({
+        "Browser": "Playwright Chromium",
+        "Protocol-Version": "1.3",
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/120.0.0.0 Safari/537.36"
+    })
 
 
 @app.route('/chrome/ws/<path:path>')
 def chrome_websocket(path):
-    """Proxy WebSocket connections to Chrome DevTools Protocol."""
-    from flask import Flask, request
-    # This would require websocket support - for now, we'll use a simpler approach
-    # by providing instructions for direct access
+    """Playwright doesn't use DevTools WebSocket protocol."""
     return jsonify({
-        "error": "WebSocket proxy requires additional setup",
-        "alternative": "Use the /chrome/navigate endpoint for automated login"
-    }), 501
+        "note": "Playwright uses its own protocol, not Chrome DevTools WebSocket",
+        "alternative": "Use /chrome/navigate for browser control"
+    }), 200
 
 
 @app.route('/chrome/login', methods=['POST'])
 def chrome_login():
-    """Direct login endpoint - accepts credentials and logs in via Chrome automation."""
-    data = request.get_json()
-    site = data.get('site')  # 'linkedin' or 'indeed'
-    email = data.get('email')
-    password = data.get('password')
+    """Navigate to login page and wait for user to complete login."""
+    global playwright_context
 
-    if not all([site, email, password]):
-        return jsonify({"error": "Missing credentials"}), 400
+    if not playwright_context:
+        return jsonify({"error": "Browser not started. Call POST /chrome/start first"}), 503
+
+    data = request.get_json() or {}
+    site = data.get('site', 'linkedin')
+
+    login_urls = {
+        'linkedin': 'https://www.linkedin.com/login',
+        'indeed': 'https://secure.indeed.com/account/login'
+    }
+
+    if site not in login_urls:
+        return jsonify({"error": f"Unknown site: {site}. Use 'linkedin' or 'indeed'"}), 400
+
+    try:
+        # Get or create a page
+        if playwright_context.pages:
+            page = playwright_context.pages[0]
+        else:
+            page = playwright_context.new_page()
+
+        # Navigate to login page
+        page.goto(login_urls[site], wait_until='networkidle', timeout=30000)
+
+        return jsonify({
+            "success": True,
+            "site": site,
+            "url": login_urls[site],
+            "message": f"Navigated to {site} login page",
+            "note": "Browser is ready. Please complete login manually."
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
     try:
         # Use the same Chrome automation as ApplyWorker

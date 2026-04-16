@@ -1,12 +1,36 @@
 FROM python:3.14-slim
 
-# Install system dependencies
+# Install system dependencies including Chrome dependencies for Playwright
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
     curl \
     sqlite3 \
     git \
+    ca-certificates \
+    fonts-liberation \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libatspi2.0-0 \
+    libcups2 \
+    libdbus-1-3 \
+    libdrm2 \
+    libgbm1 \
+    libgtk-3-0 \
+    libnspr4 \
+    libnss3 \
+    libwayland-client0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxkbcommon0 \
+    libxrandr2 \
+    xdg-utils \
+    libx11-xcb1 \
+    libx11-6 \
+    libxext6 \
+    libxshmfence1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Chrome for job scraping (modern method without apt-key)
@@ -33,7 +57,11 @@ RUN git clone https://github.com/metanmai/ApplyPilot.git /tmp/applypilot && \
     rm -rf /tmp/applypilot
 
 # Install additional dependencies
-RUN pip install pydantic tls-client requests markdownify regex httpx
+RUN pip install pydantic tls-client requests markdownify regex httpx playwright
+
+# Install Playwright browsers
+RUN playwright install chromium
+RUN playwright install-deps chromium
 
 WORKDIR /app
 

@@ -26,3 +26,4 @@ __pycache__/
 worktrees/
 exclude ApplyPilot
 exclude ApplyPilot
+local-data/
