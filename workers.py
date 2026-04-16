@@ -618,7 +618,7 @@ class EnrichWorker(Worker):
     """Worker that fetches full job descriptions for jobs in the queue."""
 
     def _get_next_job_status(self) -> str:
-        return 'pending_enrich'
+        return 'pending_discover'
 
     def _is_already_processed(self, job: dict) -> bool:
         """Skip jobs that already have a full description."""
