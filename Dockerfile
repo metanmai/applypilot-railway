@@ -50,8 +50,10 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
 RUN npm install -g @anthropic-ai/claude-code
 
 # Clone and install ApplyPilot from forked GitHub repo (non-editable install)
+# Cache bust 2024-04-16-05:00 to ensure latest changes
 RUN git clone https://github.com/metanmai/ApplyPilot.git /tmp/applypilot && \
     cd /tmp/applypilot && \
+    git fetch origin && git checkout main && \
     pip install --no-cache-dir . && \
     pip install --no-deps python-jobspy && \
     cd / && \
